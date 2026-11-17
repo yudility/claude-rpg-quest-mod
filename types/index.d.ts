@@ -35,6 +35,8 @@ declare module 'claude-code' {
       isAdding: boolean
       isPicking: boolean
       isDeleting: boolean
+      isEditPicking: boolean
+      editingId: string
       settings: Settings
       isEditingHair: boolean
       picked: string[]

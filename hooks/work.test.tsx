@@ -3,7 +3,7 @@ import { expect, test } from 'claude-code/testing'
 const FILE = {
   date: '2026-11-16',
   tasks: [
-    { id: 'fw', sec: 'BOSS', boss: true, t: '고객사 교안 전달', xp: 150 },
+    { id: 'fw', sec: 'BOSS', boss: true, t: 'Founders Week 교안', xp: 150 },
     { id: 'm1', sec: '메인', t: '계약서 확인', xp: 60 },
   ],
 }
@@ -101,5 +101,44 @@ test('설정 창: 라이트 테마와 머리색을 고르면 hero.json 에 저�
   const last = written.at(-1)!
   expect(last.path).toBe('/home/test/.quest/hero.json')
   expect(JSON.parse(last.text)).toEqual({ theme: 'light', hair: '#c8ccd8' })
+  await ui.unmount()
+})
+
+test('e → 항목 키 → 제목·마감을 고쳐 저장한다', async ($, on) => {
+  const file = { date: '2026-11-16', tasks: [{ id: 'm1', sec: '메인', t: '계약서 확인', xp: 60, due: '2026-11-18' }] }
+  const state: Record<string, unknown> = {
+    data: file, combo: 0, isAdding: false, isPicking: false, isDeleting: false, isEditPicking: false, editingId: '', picked: [],
+  }
+  on('state.get', (_: any, e: any) => ({ value: { value: state[(e.key ?? e.ref?.key) as string], version: 1 } }))
+  on('state.set', (_: any, e: any) => {
+    state[(e.key ?? e.ref?.key) as string] = e.value
+    return { value: { isSet: true, version: 2 } }
+  })
+  const written: string[] = []
+  on('fs.read', (_: any, e: any) => ({ value: e.path.endsWith('tasks.json') ? (written.at(-1) ?? JSON.stringify(file)) : '' }))
+  on('fs.write', (_: any, e: any) => {
+    if (e.path.endsWith('tasks.json')) written.push(e.text)
+    return { value: undefined }
+  })
+  on('clock.now', () => ({ value: Date.parse('2026-11-16T03:00:00Z') }))
+  on('ui.toast', () => ({ value: undefined }))
+  on('ui.focus', () => ({ value: {} }))
+  on('env.get', () => ({ value: '/home/test' }))
+  on('command.register', () => ({ value: { command: 'quest' } }))
+  on('clock.every', () => ({ value: undefined }))
+  on('process.run', () => ({ value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
+  on('session.start', (_: any, e: any) => ({ cwd: e.cwd }))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true } as any)
+  const ui = await $.ui.mount({
+    plugin: 'quest-board', component: 'Pane', requestId: 'quest', surface: 'terminal',
+    props: { title: 'Quest', isFocused: true, bodyColumns: 60, placement: 'dock', scroll: { offset: 0, bodyRows: 40 }, view: {} },
+  } as any)
+  await ui.press({ key: 'edit' })
+  await ui.redraw()
+  await ui.press({ key: 'm1' })
+  await ui.redraw()
+  await ui.input({ key: 'edit', text: '계약서 v3 확인 11/20', submit: true } as any)
+  const saved = JSON.parse(written.at(-1)!)
+  expect(saved.tasks[0]).toEqual({ id: 'm1', sec: '메인', t: '계약서 v3 확인', xp: 60, due: '2026-11-20' })
   await ui.unmount()
 })

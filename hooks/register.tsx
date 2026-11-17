@@ -11,7 +11,7 @@ const PANE = 'quest'
 const LEVEL_XP = 120
 const POLL_MS = 3000
 // 마우스·Tab이 안 먹는 터미널(Orca)에서도 체크되게 항목마다 단축키
-const HOTKEYS = '123456789bcefghijklmnopstuvyz' // a 추가 · d 삭제 · r 메일로 갱신 · w 작업 맡기기 · x 취소
+const HOTKEYS = '123456789bcfghijklmnopstuvyz' // a 추가 · d 삭제 · e 수정 · r 메일로 갱신 · w 작업 맡기기 · x 취소
 const REFRESH_PROMPT = `퀘스트 보드 갱신해줘.
 1. Gmail에서 지난 7일 받은편지함·보낸편지함, Google Calendar에서 오늘~이번 주 일정을 읽는다.
 2. 내가 해야 할 일만 뽑아 등급을 매긴다.
@@ -32,6 +32,8 @@ const isAdding = atom({ plugin: 'quest-board', key: 'isAdding' } as const, false
 const isPicking = atom({ plugin: 'quest-board', key: 'isPicking' } as const, false)
 const picked = atom({ plugin: 'quest-board', key: 'picked' } as const, [])
 const isDeleting = atom({ plugin: 'quest-board', key: 'isDeleting' } as const, false)
+const isEditPicking = atom({ plugin: 'quest-board', key: 'isEditPicking' } as const, false)
+const editingId = atom({ plugin: 'quest-board', key: 'editingId' } as const, '')
 const settings = atom({ plugin: 'quest-board', key: 'settings' } as const, {} as Settings)
 const isEditingHair = atom({ plugin: 'quest-board', key: 'isEditingHair' } as const, false)
 const SETTINGS_PANE = 'quest-settings'
@@ -258,6 +260,38 @@ function submitPrompt($: EngineInterface, text: string) {
     .catch(err => $.ui.toast(`요청 실패: ${String(err)}`))
 }
 
+// e: 고칠 항목 고르기 → 제목·마감이 채워진 입력칸 → Enter로 저장
+async function startEditing($: EngineInterface) {
+  await update($, isEditPicking, () => true)
+}
+
+async function chooseEdit($: EngineInterface, id: string) {
+  await update($, isEditPicking, () => false)
+  await update($, editingId, () => id)
+  await $.ui.focus({ requestId: PANE, key: 'edit' }).catch(() => undefined)
+}
+
+async function saveEdit($: EngineInterface, id: string, value: string) {
+  await update($, editingId, () => '')
+  const v = value.trim()
+  if (!v) return
+  await reload($)
+  const file = await read($, data)
+  if (!file) return
+  const { t, due } = parseTitle(v, todayOf(await $.clock.now()))
+  const tasks = file.tasks.map(x => {
+    if (x.id !== id) return x
+    const { due: _old, ...rest } = x
+    return due ? { ...rest, t, due } : { ...rest, t }
+  })
+  const newFile = { ...file, tasks }
+  const text = JSON.stringify(newFile, null, 2)
+  await $.fs.write(path, text)
+  lastText = text
+  await update($, data, () => newFile)
+  $.ui.toast(`✏️ 수정: ${t}`, { timeoutMs: 1500 })
+}
+
 async function startDeleting($: EngineInterface) {
   await update($, isDeleting, () => true)
 }
@@ -280,6 +314,8 @@ async function removeQuest($: EngineInterface, id: string) {
 
 async function cancelPick($: EngineInterface) {
   await update($, isDeleting, () => false)
+  await update($, isEditPicking, () => false)
+  await update($, editingId, () => '')
   await update($, isPicking, () => false)
   await update($, picked, () => [])
 }
@@ -425,6 +461,8 @@ export const register: Register = on => {
     const picking = await read($, isPicking)
     const pickedIds = await read($, picked)
     const deleting = await read($, isDeleting)
+    const editPicking = await read($, isEditPicking)
+    const editing = await read($, editingId)
     const bosses = ts.filter(t => t.boss && !t.done).length
     const secs = [...new Set(ts.map(t => t.sec))]
     const order = secs.flatMap(sec => ts.filter(t => t.sec === sec).map(t => t.id))
@@ -450,7 +488,12 @@ export const register: Register = on => {
           </Text>
         </Text>
         <Text color={WOOD}>{'─'.repeat(Math.max(10, ((e.props as { bodyColumns?: number }).bodyColumns ?? 40) - 4))}</Text>
-        {deleting ? (
+        {editPicking ? (
+          <Box>
+            <Text color="cyan">고칠 퀘스트의 키를 누르세요 · </Text>
+            <Button key="cancel" plain hotkey="x" label="취소" onPress={() => cancelPick($)} />
+          </Box>
+        ) : deleting ? (
           <Box>
             <Text color="red">지울 퀘스트의 키를 누르세요 · </Text>
             <Button key="cancel" plain hotkey="x" label="취소" onPress={() => cancelPick($)} />
@@ -469,6 +512,8 @@ export const register: Register = on => {
             <Button key="refresh" plain hotkey="r" label="메일로 갱신" onPress={() => refresh($)} />
             <Text dimColor> · </Text>
             <Button key="work" plain hotkey="w" label="작업 맡기기" onPress={() => work($)} />
+            <Text dimColor> · </Text>
+            <Button key="edit" plain hotkey="e" label="수정" onPress={() => startEditing($)} />
             <Text dimColor> · </Text>
             <Button key="delete" plain hotkey="d" label="삭제" onPress={() => startDeleting($)} />
             <Text dimColor> · Esc 닫기</Text>
@@ -504,7 +549,9 @@ export const register: Register = on => {
                   hotkey={HOTKEYS[order.indexOf(t.id)]}
                   autoFocus={t.id === firstOpen ? true : undefined}
                   dimColor={t.done}
-                  onPress={() => (deleting ? removeQuest($, t.id) : picking ? pick($, t.id) : toggle($, t.id))}
+                  onPress={() =>
+                    editPicking ? chooseEdit($, t.id) : deleting ? removeQuest($, t.id) : picking ? pick($, t.id) : toggle($, t.id)
+                  }
                 >
                   <Text color={t.done ? '#6aa84f' : WOOD}>
                     {picking ? (pickedIds.includes(t.id) ? '[▶] ' : '[ ] ') : t.done ? '[✔] ' : '[ ] '}
@@ -518,6 +565,16 @@ export const register: Register = on => {
                     +{xpOf(t)}
                   </Text>
                 </Button>
+                {editing === t.id && (
+                  <Input
+                    key="edit"
+                    label="수정: "
+                    value={t.due ? `${t.t} ${t.due}` : t.t}
+                    submitLabel="저장"
+                    autoFocus
+                    onSubmit={value => saveEdit($, t.id, value)}
+                  />
+                )}
                 {t.d && !t.done && (
                   <Text dimColor wrap="truncate-end">
                     {'    '}
