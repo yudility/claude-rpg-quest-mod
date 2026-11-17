@@ -22,6 +22,7 @@ const REFRESH_PROMPT = `퀘스트 보드 갱신해줘.
    내가 보내고 상대 답장을 기다리는 건은 넣지 않는다.
 3. ~/.quest/tasks.json을 새로 쓴다. 형식: {"date":"오늘 YYYY-MM-DD","tasks":[{"id":영문 kebab-case,"sec":등급,"boss":bool,"t":제목(상대 이름 포함),"d":보충 설명,"xp":숫자,"done":bool,"due":"YYYY-MM-DD 마감(메일·일정에 있으면)","doneAt":"YYYY-MM-DD"}]}
    - 지금 파일의 항목은 id·due를 유지해 이어 넣는다. 오늘 완료(doneAt이 오늘)는 그대로 두고, 그 전에 완료된 건 뺀다. 메일상 끝난 걸로 확인되면 done:true, doneAt:오늘.
+   - 뺀 완료 항목들의 xp 합을 최상위 "archivedXp"에 더한다(레벨은 누적). 기존 archivedXp 값은 유지.
    - 순서는 BOSS → 메인 → 사이드 → 잡몹 → 완료.
 4. 다 쓰고 나서 추가·완료 처리·빠진 항목을 짧게 알려준다.`
 
@@ -78,6 +79,8 @@ const CLASSES: [Settings['heroClass'] & string, Settings][] = [
 ]
 const SECTION_MONSTER: Record<string, string> = { BOSS: '킹슬라임', 메인: '버섯', 사이드: '슬라임', 잡몹: '슬라임', 추가: '슬라임' }
 const earned = (ts: Quest[]) => ts.filter(t => t.done).reduce((s, t) => s + xpOf(t), 0)
+// 레벨용 누적 XP: 숨겨진 완료 + 파일에서 지운 완료까지
+const totalXp = (file: QuestFile) => (file.archivedXp ?? 0) + earned(file.tasks)
 const bar = (frac: number, width: number) => {
   const n = Math.round(frac * width)
   return '█'.repeat(n) + '░'.repeat(width - n)
@@ -166,7 +169,7 @@ async function reload($: EngineInterface) {
   try {
     const parsed = JSON.parse(text) as QuestFile
     lastText = text
-    await update($, data, () => ({ date: parsed.date, tasks: parsed.tasks ?? [] }))
+    await update($, data, () => ({ date: parsed.date, tasks: parsed.tasks ?? [], archivedXp: parsed.archivedXp ?? 0 }))
   } catch {
     // ponytail: 쓰는 도중 읽힌 반쪽 JSON은 다음 폴링에서 다시 읽는다
   }
@@ -180,7 +183,7 @@ async function toggle($: EngineInterface, id: string) {
   const t = tasks.find(x => x.id === id)
   if (!t) return
   const today = todayOf(await $.clock.now())
-  const levelBefore = Math.floor(earned(visibleTasks(tasks, file.date, today)) / LEVEL_XP)
+  const levelBefore = Math.floor(totalXp(file) / LEVEL_XP)
   const next = tasks.map(x =>
     x.id !== id ? x : x.done ? { ...x, done: false, doneAt: undefined } : { ...x, done: true, doneAt: today },
   )
@@ -202,7 +205,7 @@ async function toggle($: EngineInterface, id: string) {
   gainXp = xpOf(t)
   const c = (await read($, combo)) + 1
   await update($, combo, () => c)
-  const levelAfter = Math.floor(earned(shown) / LEVEL_XP)
+  const levelAfter = Math.floor(totalXp(newFile) / LEVEL_XP)
   if (shown.every(x => x.done)) $.ui.toast('🎉 STAGE CLEAR! 오늘 퀘스트 전부 완료', { timeoutMs: 6000 })
   else if (t.boss) $.ui.toast(`⚔ BOSS DEFEATED!  +${xpOf(t)} XP`)
   else if (levelAfter > levelBefore) $.ui.toast(`⬆ LEVEL UP!  LV.${levelAfter + 1}`)
@@ -265,7 +268,9 @@ async function removeQuest($: EngineInterface, id: string) {
   const file = await read($, data)
   const t = file?.tasks.find(x => x.id === id)
   if (!file || !t) return
-  const newFile = { ...file, tasks: file.tasks.filter(x => x.id !== id) }
+  // 완료한 걸 지우면 그 XP는 누적에 남긴다
+  const archivedXp = (file.archivedXp ?? 0) + (t.done ? xpOf(t) : 0)
+  const newFile = { ...file, tasks: file.tasks.filter(x => x.id !== id), archivedXp }
   const text = JSON.stringify(newFile, null, 2)
   await $.fs.write(path, text)
   lastText = text
@@ -335,7 +340,7 @@ export const register: Register = on => {
     const { Box, Text, Button } = $.ui.resolve(e)
     const today = todayOf(await $.clock.now())
     const ts = visibleTasks(file.tasks, file.date, today)
-    const xp = earned(ts)
+    const xp = totalXp(file)
     const done = ts.filter(t => t.done).length
     const nxt = ts.find(t => t.boss && !t.done) ?? ts.find(t => !t.done)
     const monster = monsterOf(nxt?.sec, nxt?.boss)
@@ -414,7 +419,7 @@ export const register: Register = on => {
     if (!file) return <Text dimColor>~/.quest/tasks.json 을 읽지 못했어요.</Text>
     const today = todayOf(await $.clock.now())
     const ts = visibleTasks(file.tasks, file.date, today)
-    const xp = earned(ts)
+    const xp = totalXp(file)
     const c = await read($, combo)
     const adding = await read($, isAdding)
     const picking = await read($, isPicking)

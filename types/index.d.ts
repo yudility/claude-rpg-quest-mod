@@ -11,7 +11,8 @@ export type Quest = {
   // quest-work 스킬이 남긴 결과
   work?: { status: 'running' | 'ready' | 'skip' | 'failed'; note: string; draft?: boolean; at?: string }
 }
-export type QuestFile = { date?: string; tasks: Quest[] }
+// archivedXp: 파일에서 지운 완료 항목의 XP 합 (레벨은 누적)
+export type QuestFile = { date?: string; tasks: Quest[]; archivedXp?: number }
 // ~/.quest/hero.json: 캐릭터 색 + 화면 테마
 export type Settings = {
   theme?: 'dark' | 'light' | 'system'

@@ -66,6 +66,7 @@ test('d → 항목 키로 퀘스트를 지운다', async ($, on) => {
   await ui.press({ key: 'm1' })
   const saved = JSON.parse(written.at(-1)!)
   expect(saved.tasks.map((t: any) => t.id)).toEqual(['fw'])
+  expect(saved.archivedXp).toBe(0) // 완료 안 한 걸 지우면 누적 XP 그대로
   await ui.unmount()
 })
 
